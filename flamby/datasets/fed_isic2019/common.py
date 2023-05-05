@@ -3,11 +3,12 @@ import torch
 from flamby.datasets.fed_isic2019.dataset import FedIsic2019
 
 NUM_CLIENTS = 6
-BATCH_SIZE = 64
-NUM_EPOCHS_POOLED = 20
-LR = 5e-4
+BATCH_SIZE = 32
+BATCH_SIZE_POOLED = 32
+NUM_EPOCHS_POOLED = 10
+LR = 0.001
 Optimizer = torch.optim.Adam
-
+dropout = 0.1
 FedClass = FedIsic2019
 
 

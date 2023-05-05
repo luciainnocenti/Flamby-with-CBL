@@ -8,7 +8,7 @@ BATCH_SIZE = 2
 SEEDS = [0, 10, 20, 30, 40]
 NUM_EPOCHS_POOLED = 10
 LR = 0.001
-
+dropout = 0.2
 Optimizer = torch.optim.AdamW
 
 FedClass = FedIXITiny

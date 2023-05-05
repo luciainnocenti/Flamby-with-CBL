@@ -30,6 +30,7 @@ def evaluate_dice_on_tests(
     test_dataloaders,
     metric,
     use_gpu=True,
+    dropout=False
 ):
 
     """This function takes a pytorch model and evaluate it on a list of\
@@ -56,7 +57,10 @@ def evaluate_dice_on_tests(
     results_dict = {}
     if torch.cuda.is_available() and use_gpu:
         model = model.cuda()
-    model.eval()
+    if not dropout:
+        model.eval()
+    else:
+        model.train()
     with torch.inference_mode():
         for i in tqdm(range(len(test_dataloaders))):
             dice_list = []

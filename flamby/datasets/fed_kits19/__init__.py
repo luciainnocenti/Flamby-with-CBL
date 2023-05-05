@@ -6,6 +6,7 @@ from flamby.datasets.fed_kits19.common import (
     Optimizer,
     get_nb_max_rounds,
     FedClass,
+    dropout,
 )
 from flamby.datasets.fed_kits19.dataset import FedKits19, Kits19Raw
 from flamby.datasets.fed_kits19.metric import (

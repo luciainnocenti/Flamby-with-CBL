@@ -8,7 +8,7 @@ BATCH_SIZE = 8
 NUM_EPOCHS_POOLED = 10
 LR = 0.005
 Optimizer = torch.optim.Adam
-
+dropout = 0.2
 FedClass = FedSynthetic
 
 

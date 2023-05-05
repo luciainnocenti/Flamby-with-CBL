@@ -4,12 +4,11 @@ from flamby.datasets.fed_lidc_idri.dataset import FedLidcIdri
 
 NUM_CLIENTS = 4
 NUM_EPOCHS_POOLED = 100
-BATCH_SIZE = 1
+BATCH_SIZE = 2
 LR = 1e-2
 SEEDS = [42]
-
 Optimizer = torch.optim.Adam
-
+dropout = 0.2
 FedClass = FedLidcIdri
 
 

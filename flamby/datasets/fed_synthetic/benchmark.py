@@ -15,6 +15,7 @@ from flamby.datasets.fed_synthetic import (
     BaselineLoss,
     FedSynthetic,
     metric,
+    dropout,
 )
 from flamby.utils import evaluate_model_on_tests
 
@@ -68,7 +69,7 @@ def main(
         # At each new seed we re-initialize the model
         # and training_dl is shuffled as well
         torch.manual_seed(seed)
-        m = Baseline(n_features)
+        m = Baseline(input_dim=n_features, dropout=dropout)
         # We put the model on GPU whenever it is possible
         if use_gpu:
             m = m.cuda()

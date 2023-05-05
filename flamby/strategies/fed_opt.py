@@ -36,7 +36,7 @@ class FedOpt:
         server_learning_rate: float = 1e-2,
         beta1=0.9,
         beta2=0.999,
-        logdir="./runs",
+        logdir="./runs/federated",
         log_basename="fed_opt",
     ):
         """_summary_
@@ -288,7 +288,7 @@ class FedAdam(FedOpt):
         server_learning_rate: float = 1e-2,
         beta1=0.9,
         beta2=0.999,
-        logdir="./runs",
+        logdir="./runs/federated",
         log_basename="fed_adam",
     ):
         super().__init__(
@@ -434,7 +434,7 @@ class FedYogi(FedOpt):
         server_learning_rate: float = 1e-2,
         beta1: float = 0.9,
         beta2: float = 0.999,
-        logdir: str = "./runs",
+        logdir: str = "./runs/federated",
         log_basename: str = "fed_yogi",
     ):
 
@@ -588,7 +588,7 @@ class FedAdagrad(FedOpt):
         server_learning_rate: float = 1e-2,
         beta1: float = 0.9,
         beta2: float = 0.999,
-        logdir: str = "./runs",
+        logdir: str = "./runs/federated",
         log_basename: str = "fed_adagrad",
     ):
 

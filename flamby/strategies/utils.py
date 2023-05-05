@@ -75,7 +75,7 @@ class _Model:
         log=False,
         log_period=100,
         log_basename="local_model",
-        logdir="./runs",
+        logdir="./runs/federated",
         seed=None,
     ):
         """_summary_
@@ -221,7 +221,7 @@ class _Model:
                         _loss,
                         self.num_batches_seen,
                     )
-
+                '''
                 if _current_epoch > self.current_epoch:
                     # At each epoch we look at the histograms of all the
                     # network's parameters
@@ -229,7 +229,7 @@ class _Model:
                         self.writer.add_histogram(
                             f"client{self.client_id}/{name}", p, _current_epoch
                         )
-
+                '''
             self.current_epoch = _current_epoch
 
     def _prox_local_train(self, dataloader_with_memory, num_updates, mu):
@@ -290,11 +290,12 @@ class _Model:
                     if _current_epoch > self.current_epoch:
                         # At each epoch we look at the histograms of all the
                         # network's parameters
+                        '''
                         for name, p in self.model.named_parameters():
                             self.writer.add_histogram(
                                 f"client{self.client_id}/{name}", p, _current_epoch
                             )
-
+                        '''
                     print(
                         f"loss: {_loss:>7f} after {self.num_batches_seen:>5d}"
                         f" batches of data amounting to {_current_epoch:>5d}"
@@ -363,11 +364,12 @@ class _Model:
                     if _current_epoch > self.current_epoch:
                         # At each epoch we look at the histograms of all the
                         # network's parameters
+                        '''
                         for name, p in self.model.named_parameters():
                             self.writer.add_histogram(
                                 f"client{self.client_id}/{name}", p, _current_epoch
                             )
-
+                        '''
                     print(
                         f"loss: {_loss:>7f} after {self.num_batches_seen:>5d}"
                         f" batches of data amounting to {_current_epoch:>5d}"

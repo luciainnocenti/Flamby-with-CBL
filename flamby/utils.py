@@ -9,6 +9,7 @@ import seaborn as sns
 import torch
 import yaml
 from tqdm import tqdm
+from torch import nn
 
 import flamby.datasets as datasets
 
@@ -16,7 +17,7 @@ torch.manual_seed(42)
 
 
 def evaluate_model_on_tests(
-    model, test_dataloaders, metric, use_gpu=True, return_pred=False
+    model, test_dataloaders, metric, use_gpu=True, return_pred=False, dropout=False
 ):
     """This function takes a pytorch model and evaluate it on a list of\
     dataloaders using the provided metric function.
@@ -44,7 +45,10 @@ def evaluate_model_on_tests(
     y_pred_dict = {}
     if torch.cuda.is_available() and use_gpu:
         model = model.cuda()
-    model.eval()
+    if not dropout:
+        model.eval()
+    else:
+        model.train()
     with torch.no_grad():
         for i in tqdm(range(len(test_dataloaders))):
             test_dataloader_iterator = iter(test_dataloaders[i])
@@ -69,6 +73,31 @@ def evaluate_model_on_tests(
         return results_dict, y_true_dict, y_pred_dict
     else:
         return results_dict
+
+
+def evaluate_autoencoder_on_tests(
+    model, test_dataloaders, use_gpu=True
+):
+    criterion = nn.MSELoss()
+    ae_scores_dict = {}
+    if torch.cuda.is_available() and use_gpu:
+        model = model.cuda()
+    model.eval()
+    with torch.no_grad():
+        for i in tqdm(range(len(test_dataloaders))):
+            test_dataloader_iterator = iter(test_dataloaders[i])
+            ae_preds_score = []
+            for (x, _) in test_dataloader_iterator:
+                if torch.cuda.is_available() and use_gpu:
+                    x = x.cuda()
+                y_pred = model(x).detach().cpu()
+                y = x.detach().cpu()
+                loss = criterion(y_pred, y)
+                ae_preds_score.append(loss)
+
+            ae_preds_score = np.concatenate(ae_preds_score)
+            ae_scores_dict[f"client_test_{i}"] = ae_preds_score
+    return ae_scores_dict
 
 
 def read_config(config_file):

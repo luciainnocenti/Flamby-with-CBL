@@ -203,3 +203,4 @@ if __name__ == "__main__":
 
     save_json(json_dict, os.path.join(out_base, "dataset.json"))
     write_value_in_config(path_to_config_file, "download_complete", True)
+    print('parsing ended')

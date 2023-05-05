@@ -18,21 +18,26 @@ class Baseline(nn.Module):
     (https://github.com/lukemelas/EfficientNet-PyTorch).
     """
 
-    def __init__(self, pretrained=True, arch_name="efficientnet-b0"):
+    def __init__(self, dropout, pretrained=True, arch_name="efficientnet-b1"):
         super(Baseline, self).__init__()
         self.pretrained = pretrained
+        self.overide_params = {'dropout_rate': dropout, 'include_top': True}
         self.base_model = (
-            EfficientNet.from_pretrained(arch_name)
+            EfficientNet.from_pretrained(arch_name, **self.overide_params)
             if pretrained
-            else EfficientNet.from_name(arch_name)
+            else EfficientNet.from_name(arch_name, **self.overide_params)
         )
         # self.base_model=torchvision.models.efficientnet_v2_s(pretrained=pretrained)
         nftrs = self.base_model._fc.in_features
         print("Number of features output by EfficientNet", nftrs)
-        self.base_model._fc = nn.Linear(nftrs, 8)
+        self.base_model._fc = nn.Linear(nftrs, 256)
+        self.output = nn.Sequential(nn.LeakyReLU(),
+                                    nn.Dropout(p=dropout),
+                                    nn.Linear(256, 8))
 
     def forward(self, image):
         out = self.base_model(image)
+        out = self.output(out)
         return out
 
 

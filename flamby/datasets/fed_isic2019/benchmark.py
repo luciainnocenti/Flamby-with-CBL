@@ -11,12 +11,14 @@ from sklearn import metrics
 
 from flamby.datasets.fed_isic2019 import (
     BATCH_SIZE,
+    BATCH_SIZE_POOLED,
     LR,
     NUM_EPOCHS_POOLED,
     Baseline,
     BaselineLoss,
     FedIsic2019,
     metric,
+    dropout,
 )
 from flamby.utils import check_dataset_from_config, evaluate_model_on_tests
 
@@ -181,7 +183,7 @@ def main(args):
         class_weights,
     )
 
-    model = Baseline()
+    model = Baseline(dropout=dropout)
     model = model.to(device)
     lossfunc = BaselineLoss(alpha=class_weights)
 
@@ -257,7 +259,7 @@ if __name__ == "__main__":
         drop_last=True,
     )
 
-    model = Baseline()
+    model = Baseline(dropout=dropout)
     dict = check_dataset_from_config(dataset_name="fed_isic2019", debug=False)
     input_path = dict["dataset_path"]
     dic = {"model_dest": os.path.join(input_path, "saved_model_state_dict")}

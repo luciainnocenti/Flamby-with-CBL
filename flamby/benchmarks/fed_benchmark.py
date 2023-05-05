@@ -1,5 +1,6 @@
 import argparse
 import copy
+import pickle
 
 import numpy as np
 import pandas as pd
@@ -24,7 +25,12 @@ from flamby.benchmarks.conf import (
     get_results_file,
     get_strategies,
 )
+from flamby.consensus.data_structure import create_data_structure
+from flamby.consensus.uncertainty import uncertainty_computation
 from flamby.gpu_utils import use_gpu_idx
+from flamby.benchmarks.ensemble_utils import get_task, train_autoencoder_tabular, train_autoencoder_image, \
+    get_ensemble_methods
+from flamby.utils import evaluate_autoencoder_on_tests
 
 
 def main(args_cli):
@@ -50,6 +56,7 @@ def main(args_cli):
     set_seed(args_cli.seed)
 
     use_gpu = use_gpu_idx(args_cli.GPU, args_cli.cpu_only)
+    print(f"use gpu = {use_gpu}")
     hyperparameters_names = [
         "learning_rate",
         "server_learning_rate",
@@ -77,18 +84,22 @@ def main(args_cli):
             ", otherwise modify the config file directly."
         )
     # Find a way to provide it through hyperparameters
-    run_num_updates = [100]
+    run_num_updates = [20]
 
     # ensure that the config provided by the user is ok
     config = check_config(args_cli.config_file_path)
 
     dataset_name = config["dataset"]
-
+    task = get_task(dataset_name)
+    import os
+    PROJECT_DIR = os.path.join(os.getcwd(), dataset_name)
+    os.makedirs(PROJECT_DIR, exist_ok=True)
     # get all the dataset specific handles
     (
         FedDataset,
         [
             BATCH_SIZE,
+            BATCH_SIZE_POOLED,
             LR,
             NUM_CLIENTS,
             NUM_EPOCHS_POOLED,
@@ -98,11 +109,14 @@ def main(args_cli):
             get_nb_max_rounds,
             metric,
             collate_fn,
+            dropout
         ],
     ) = get_dataset_args(dataset_name)
-
+    print(f"optimizer = {Optimizer}")
+    print(f'dataset_name = {dataset_name}, task = {task}')
     nrounds_list = [get_nb_max_rounds(num_updates) for num_updates in run_num_updates]
-
+    if BATCH_SIZE_POOLED is None:
+        BATCH_SIZE_POOLED = BATCH_SIZE
     if args_cli.debug:
         nrounds_list = [1 for _ in run_num_updates]
         NUM_EPOCHS_POOLED = 1
@@ -112,7 +126,7 @@ def main(args_cli):
         NUM_EPOCHS_POOLED = 0
 
     # We can now instantiate the dataset specific model on CPU
-    global_init = Baseline()
+    global_init = Baseline(dropout=dropout)
 
     # We parse the hyperparams from the config or from the CLI if strategy is given
     strategy_specific_hp_dicts = get_strategies(
@@ -141,7 +155,7 @@ def main(args_cli):
     columns_names = list(set(main_columns_names + all_strategies_args))
 
     evaluate_func, batch_size_test, compute_ensemble_perf = set_dataset_specific_config(
-        dataset_name, compute_ensemble_perf=False
+        dataset_name, compute_ensemble_perf=True
     )
 
     # We compute the number of local and ensemble performances we should have
@@ -158,15 +172,15 @@ def main(args_cli):
         batch_size=BATCH_SIZE,
         num_workers=args_cli.workers,
         num_clients=NUM_CLIENTS,
-        batch_size_test=batch_size_test,
+        batch_size_test=1,  # batch_size_test,
         collate_fn=collate_fn,
     )
     train_pooled, test_pooled = init_data_loaders(
         dataset=FedDataset,
         pooled=True,
-        batch_size=BATCH_SIZE,
+        batch_size=BATCH_SIZE_POOLED,
         num_workers=args_cli.workers,
-        batch_size_test=batch_size_test,
+        batch_size_test=1,  # batch_size_test,
         collate_fn=collate_fn,
     )
 
@@ -202,6 +216,13 @@ def main(args_cli):
         (df["Method"] == "Pooled Training") & (df["seed"] == args_cli.seed)
     ].index
 
+    if compute_ensemble_perf:
+        ensembling_strategies = get_ensemble_methods(task) if args_cli.ensemble_strategies is None \
+            else args_cli.ensemble_strategies
+    else:
+        ensembling_strategies = None
+    print(f"Ensembling strategies = {ensembling_strategies}")
+
     # There is no use in running the experiment if it is already found
     if (len(index_of_interest) < (NUM_CLIENTS + 1)) and do_baselines["Pooled"]:
         # dealing with edge case that shouldn't happen
@@ -210,16 +231,18 @@ def main(args_cli):
         if len(index_of_interest) > 0:
             df.drop(index_of_interest, inplace=True)
         m = copy.deepcopy(global_init)
+
         set_seed(args_cli.seed)
+        print(f'Training pooled method')
         m = train_single_centric(
             m,
             train_pooled,
             use_gpu,
-            "Pooled",
+            f"{dataset_name}_Pooled",
             pooled_hyperparameters["optimizer_class"],
             pooled_hyperparameters["learning_rate"],
             BaselineLoss,
-            NUM_EPOCHS_POOLED,
+            2*NUM_EPOCHS_POOLED,
             dp_target_epsilon=pooled_hyperparameters["dp_target_epsilon"],
             dp_target_delta=pooled_hyperparameters["dp_target_delta"],
             dp_max_grad_norm=pooled_hyperparameters["dp_max_grad_norm"],
@@ -235,6 +258,7 @@ def main(args_cli):
         ) = evaluate_model_on_local_and_pooled_tests(
             m, test_dls, test_pooled, metric, evaluate_func
         )
+
         df = fill_df_with_xp_results(
             df,
             perf_dict,
@@ -272,12 +296,13 @@ def main(args_cli):
         y_pred_dicts = {}
         pooled_y_true_dicts = {}
         pooled_y_pred_dicts = {}
-
+        saved_models = {}
+        ae_models = {} if 'ae' in ensembling_strategies and compute_ensemble_perf else None
         for i in range(NUM_CLIENTS):
             index_of_interest = df.loc[
                 (df["Method"] == f"Local {i}") & (df["seed"] == args_cli.seed)
             ].index
-            # We do the experiments only if results are not found or we need
+            # We do the experiments only if results are not found, or we need
             # ensemble performances AND this experiment is planned.
             # i.e. we allow to not do anything else if the user specify
             if (
@@ -289,11 +314,12 @@ def main(args_cli):
                 m = copy.deepcopy(global_init)
                 method_name = f"Local {i}"
                 set_seed(args_cli.seed)
+                print(f'Training {method_name} method')
                 m = train_single_centric(
                     m,
                     training_dls[i],
                     use_gpu,
-                    method_name,
+                    f"{dataset_name}_Local_{i}",
                     pooled_hyperparameters["optimizer_class"],
                     pooled_hyperparameters["learning_rate"],
                     BaselineLoss,
@@ -303,6 +329,7 @@ def main(args_cli):
                     dp_max_grad_norm=pooled_hyperparameters["dp_max_grad_norm"],
                     seed=args_cli.seed,
                 )
+
                 (
                     perf_dict,
                     pooled_perf_dict,
@@ -313,6 +340,24 @@ def main(args_cli):
                 ) = evaluate_model_on_local_and_pooled_tests(
                     m, test_dls, test_pooled, metric, evaluate_func, return_pred=True
                 )
+                dimensions = [len(y_pred_dicts[f'Local {i}'][ts]) for ts in y_pred_dicts[f'Local {i}'].keys()]
+                print(f'dimensions = {dimensions}')
+                perf_dict['weighted_average'] = np.average(list(perf_dict.values()), weights=dimensions)
+                perf_dict['average'] = np.average(list(perf_dict.values()))
+                if compute_ensemble_perf:
+                    saved_models[f"Local {i}"] = copy.deepcopy(m)
+                    if 'ae' in ensembling_strategies:
+                        if task == 'tab_classification':
+                            ae_m = train_autoencoder_tabular(dataloader=training_dls[i])
+
+                        elif task == 'img_classification':
+                            ae_m = train_autoencoder_image(dataloader=training_dls[i], modality='image')
+                        else:
+                            ae_m = (
+                                train_autoencoder_image(dataloader=training_dls[i], modality='image'),
+                                train_autoencoder_image(dataloader=training_dls[i], modality='label')
+                            )
+                        ae_models[f"Local {i}"] = ae_m
                 df = fill_df_with_xp_results(
                     df,
                     perf_dict,
@@ -331,40 +376,85 @@ def main(args_cli):
                     pooled=True,
                 )
 
+        print(f"------------------------ compute_ensemble_perf = {compute_ensemble_perf} ---------------------")
         if compute_ensemble_perf:
             print(
                 "Computing ensemble performance, local models need to have been"
                 " trained in the same runtime"
             )
-            local_ensemble_perf = ensemble_perf_from_predictions(
-                y_true_dicts, y_pred_dicts, NUM_CLIENTS, metric
-            )
-            pooled_ensemble_perf = ensemble_perf_from_predictions(
-                pooled_y_true_dicts,
-                pooled_y_pred_dicts,
-                NUM_CLIENTS,
-                metric,
-                num_clients_test=1,
-            )
+            if dataset_name == "fed_heart_disease":
+                to_norm = True
+            else:
+                to_norm = False
+            preds_concs, gt_concs = create_data_structure(y_pred_dicts, y_true_dicts, to_norm)
+            pooled_preds_concs, pooled_gt_concs = create_data_structure(pooled_y_pred_dicts, pooled_y_true_dicts, to_norm)
 
-            df = fill_df_with_xp_results(
-                df,
-                local_ensemble_perf,
-                pooled_hyperparameters,
-                "Ensemble",
-                columns_names,
-                results_file,
-            )
-            df = fill_df_with_xp_results(
-                df,
-                pooled_ensemble_perf,
-                pooled_hyperparameters,
-                "Ensemble",
-                columns_names,
-                results_file,
-                pooled=True,
-            )
+            with open(f'{PROJECT_DIR}/y_pred_dicts.obj', 'wb') as outp:
+                pickle.dump(y_pred_dicts, outp)
+            with open(f'{PROJECT_DIR}/y_true_dicts.obj', 'wb') as outp:
+                pickle.dump(y_true_dicts, outp)
+            for ensembling_strategy in ensembling_strategies:
+                if ensembling_strategy == 'uncertainty':
+                    weights = uncertainty_computation(saved_models, evaluate_func,
+                                                      test_dls, use_gpu, N=20, project_dir=PROJECT_DIR)
+                    pooled_weights = {'client_test_0': []}
+                    for test_set in weights.keys():
+                        for el in weights[test_set]:
+                            pooled_weights['client_test_0'].append(el)
+                elif ensembling_strategy == 'ae':
+                    weights = 0
+                    pooled_weights = 0
+                else:
+                    weights = None
+                    pooled_weights = None
+                with open(f'{PROJECT_DIR}/weights.obj', 'wb') as outp:
+                    pickle.dump(weights, outp)
+                local_ensemble_perf = ensemble_perf_from_predictions(
+                    strategy=ensembling_strategy,
+                    y_true_dicts=y_true_dicts,
+                    y_pred_dicts=preds_concs,
+                    saved_models=saved_models,
+                    num_clients=NUM_CLIENTS,
+                    metric=metric,
+                    weights=weights,
+                    task=task,
+                    proj_dir=PROJECT_DIR
+                )
 
+                pooled_ensemble_perf = ensemble_perf_from_predictions(
+                    strategy=ensembling_strategy,
+                    y_true_dicts=pooled_y_true_dicts,
+                    y_pred_dicts=pooled_preds_concs,
+                    saved_models=saved_models,
+                    num_clients=NUM_CLIENTS,
+                    metric=metric,
+                    weights=pooled_weights,
+                    task=task,
+                    proj_dir=PROJECT_DIR,
+                    num_clients_test=1
+                )
+                local_ensemble_perf['weighted_average'] = np.average(list(local_ensemble_perf.values()),
+                                                                     weights=dimensions)
+                local_ensemble_perf['average'] = np.average(list(local_ensemble_perf.values()))
+
+                df = fill_df_with_xp_results(
+                    df,
+                    local_ensemble_perf,
+                    pooled_hyperparameters,
+                    ensembling_strategy,
+                    columns_names,
+                    results_file,
+                )
+
+                df = fill_df_with_xp_results(
+                    df,
+                    pooled_ensemble_perf,
+                    pooled_hyperparameters,
+                    ensembling_strategy,
+                    columns_names,
+                    results_file,
+                    pooled=True
+                )
     # Strategies
     # Needed for perfect reproducibility otherwise strategies are ordered randomly
     strats_names = list(strategy_specific_hp_dicts.keys())
@@ -440,7 +530,8 @@ def main(args_cli):
                     ) = evaluate_model_on_local_and_pooled_tests(
                         m, test_dls, test_pooled, metric, evaluate_func
                     )
-
+                    perf_dict['weighted_average'] = np.average(list(perf_dict.values()), weights=dimensions)
+                    perf_dict['average'] = np.average(list(perf_dict.values()))
                     df = fill_df_with_xp_results(
                         df,
                         perf_dict,
@@ -458,6 +549,7 @@ def main(args_cli):
                         results_file,
                         pooled=True,
                     )
+    print(f"Experiment finished.")
 
 
 if __name__ == "__main__":
@@ -638,6 +730,15 @@ if __name__ == "__main__":
         "only training on Local {nlocal}.",
     )
     parser.add_argument("--seed", default=0, type=int, help="Seed")
+
+    parser.add_argument(
+        "--ensemble-strategies",
+        "-es",
+        default=None,
+        type=str,
+        help="List of ensemble strategies to run. If None, task-based selection is made.",
+        choices=["mav", "staple", "ae", "uncertainty"],
+    )
 
     args = parser.parse_args()
 

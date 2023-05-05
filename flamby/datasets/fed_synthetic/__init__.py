@@ -6,6 +6,7 @@ from flamby.datasets.fed_synthetic.common import (
     Optimizer,
     get_nb_max_rounds,
     FedClass,
+    dropout,
 )
 from flamby.datasets.fed_synthetic.dataset import FedSynthetic, SyntheticRaw
 from flamby.datasets.fed_synthetic.loss import BaselineLoss

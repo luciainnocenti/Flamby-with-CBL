@@ -22,7 +22,7 @@ from torch import nn
 
 
 class Baseline(Generic_UNet):
-    def __init__(self):
+    def __init__(self, dropout):
         pool_op_kernel_sizes = [[2, 2, 2], [2, 2, 2], [2, 2, 2], [2, 2, 2], [1, 2, 2]]
         conv_kernel_sizes = [
             [3, 3, 3],
@@ -43,11 +43,11 @@ class Baseline(Generic_UNet):
             norm_op=nn.InstanceNorm3d,
             norm_op_kwargs={"eps": 1e-5, "affine": True},
             dropout_op=nn.Dropout3d,
-            dropout_op_kwargs={"p": 0, "inplace": True},
+            dropout_op_kwargs={"p": dropout, "inplace": True},
             nonlin=nn.LeakyReLU,
             nonlin_kwargs={"negative_slope": 1e-2, "inplace": True},
             deep_supervision=False,
-            dropout_in_localization=False,
+            dropout_in_localization=True,
             final_nonlin=lambda x: x,
             weightInitializer=InitWeights_He(1e-2),
             pool_op_kernel_sizes=pool_op_kernel_sizes,

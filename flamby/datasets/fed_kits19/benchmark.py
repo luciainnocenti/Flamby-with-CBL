@@ -17,6 +17,7 @@ from flamby.datasets.fed_kits19 import (
     evaluate_dice_on_tests,
     metric,
     softmax_helper,
+    dropout,
 )
 from flamby.utils import check_dataset_from_config
 
@@ -155,8 +156,8 @@ def main(args):
     # device = torch.device("cuda:"+str(args.GPU) if torch.cuda.is_available() else "cpu")
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print("device", device)
-
-    model = Baseline()
+    print('dropout', dropout)
+    model = Baseline(dropout=dropout)
     # data = torch.full([2, 1, 64, 192, 192], 0, dtype=torch.float32)
 
     model = model.to(device)

@@ -52,6 +52,7 @@ def get_dataset_args(
     dataset_name,
     params=[
         "BATCH_SIZE",
+        "BATCH_SIZE_POOLED",
         "LR",
         "NUM_CLIENTS",
         "NUM_EPOCHS_POOLED",
@@ -61,6 +62,7 @@ def get_dataset_args(
         "get_nb_max_rounds",
         "metric",
         "collate_fn",
+        "dropout"
     ],
 ):
     """Get dataset spepcific handles
@@ -70,8 +72,8 @@ def get_dataset_args(
     dataset_name : str
         The name of the dataset to use.
     params : list, optional
-        All named pparameters to be fetched, by default
-        [ "BATCH_SIZE", "LR", "NUM_CLIENTS", "NUM_EPOCHS_POOLED", "Baseline",
+        All named parameters to be fetched, by default
+        [ "BATCH_SIZE", "BATCH_SIZE_POOLED", "LR", "NUM_CLIENTS", "NUM_EPOCHS_POOLED", "Baseline",
         "BaselineLoss", "Optimizer", "get_nb_max_rounds", "metric",
         "collate_fn", ]
 

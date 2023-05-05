@@ -11,10 +11,10 @@ class Baseline(nn.Module):
     Implementation based on the VNet paper: https://arxiv.org/abs/1606.04797
     """
 
-    def __init__(self, in_channels=1, dropout=True):
+    def __init__(self, in_channels=1, dropout=0.1):
         super(Baseline, self).__init__()
         self.in_channels = in_channels
-
+        dropout = bool(dropout > 0)
         self.in_tr = InputTransition(in_channels, 16)
         self.down_tr32 = DownTransition(16, 1)
         self.down_tr64 = DownTransition(32, 2)

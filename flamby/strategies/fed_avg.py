@@ -76,7 +76,7 @@ class FedAvg:
         log: bool = False,
         log_period: int = 100,
         bits_counting_function: callable = None,
-        logdir: str = "./runs",
+        logdir: str = "./runs/federated",
         log_basename: str = "fed_avg",
         seed=None,
     ):

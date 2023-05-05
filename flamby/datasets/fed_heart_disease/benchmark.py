@@ -11,6 +11,7 @@ from flamby.datasets.fed_heart_disease import (
     BATCH_SIZE,
     LR,
     NUM_EPOCHS_POOLED,
+    dropout,
     Baseline,
     BaselineLoss,
     FedHeartDisease,
@@ -60,7 +61,7 @@ def main(num_workers_torch, log=False, log_period=10, debug=False, cpu_only=Fals
         # At each new seed we re-initialize the model
         # and training_dl is shuffled as well
         torch.manual_seed(seed)
-        m = Baseline()
+        m = Baseline(dropout=dropout)
         # We put the model on GPU whenever it is possible
         if use_gpu:
             m = m.cuda()

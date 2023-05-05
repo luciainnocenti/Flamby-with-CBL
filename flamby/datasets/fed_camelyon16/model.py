@@ -7,7 +7,7 @@ import torch.nn.functional as F
 
 
 class Baseline(nn.Module):
-    def __init__(self):
+    def __init__(self, dropout):
         super(Baseline, self).__init__()
         # As per the article
         self.O = 2048  # Original dimension of the input embeddings
@@ -15,7 +15,7 @@ class Baseline(nn.Module):
 
         self.L = 128  # Dimension of the new features after query and value projections
         self.K = 1000  # Number of elements in each bag
-
+        self.dropout = dropout
         self.feature_extractor_part1 = nn.Sequential(
             nn.Linear(self.O, self.M),
         )
@@ -32,13 +32,16 @@ class Baseline(nn.Module):
         # https://arxiv.org/pdf/2012.03583.pdf Supplementary Table 3
         self.classifier = nn.Sequential(
             nn.Linear(self.L, 128),
+            nn.Dropout(p=self.dropout),
             nn.ReLU(),
             nn.Linear(128, 64),
+            nn.Dropout(p=self.dropout),
             nn.ReLU(),
             nn.Linear(64, 1),
         )
 
-    def forward(self, x):
+    def forward(self, x, dropout=0):
+        # self.dropout = dropout
         H = self.feature_extractor_part1(x)  # BxKxM
 
         # Computing the attention mask A

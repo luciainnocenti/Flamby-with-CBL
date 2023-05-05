@@ -7,6 +7,7 @@ from flamby.datasets.fed_lidc_idri.common import (
     Optimizer,
     get_nb_max_rounds,
     FedClass,
+    dropout,
 )
 from flamby.datasets.fed_lidc_idri.dataset import FedLidcIdri, LidcIdriRaw, collate_fn
 from flamby.datasets.fed_lidc_idri.loss import BaselineLoss

@@ -6,7 +6,7 @@ NUM_CLIENTS = 2
 BATCH_SIZE = 16
 NUM_EPOCHS_POOLED = 45
 LR = 0.001
-
+dropout = 0.2
 Optimizer = torch.optim.Adam
 
 FedClass = FedCamelyon16

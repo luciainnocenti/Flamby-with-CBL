@@ -84,7 +84,7 @@ class FedProx(FedAvg):
         log_period: int = 100,
         bits_counting_function: callable = None,
         log_basename: str = "fed_prox",
-        logdir: str = "./runs",
+        logdir: str = "./runs/federated",
     ):
         """Cf class docstring"""
         super().__init__(

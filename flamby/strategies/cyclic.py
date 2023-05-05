@@ -1,6 +1,5 @@
 import time
 from typing import List
-
 import numpy as np
 import torch
 from tqdm import tqdm
@@ -96,7 +95,7 @@ class Cyclic:
         deterministic_cycle: bool = False,
         rng: np.random._generator.Generator = None,
         log_basename: str = "cyclic",
-        logdir: str = "./runs",
+        logdir: str = "./runs/federated",
     ):
         """Cf class docstring"""
 
@@ -115,7 +114,6 @@ class Cyclic:
         self.log_period = log_period
         self.log_basename = log_basename + f"-deterministic{deterministic_cycle}"
         self.logdir = logdir
-
         self.models_list = [
             _Model(
                 model=model,

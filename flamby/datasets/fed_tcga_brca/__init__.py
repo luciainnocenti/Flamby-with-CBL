@@ -6,6 +6,7 @@ from flamby.datasets.fed_tcga_brca.common import (
     Optimizer,
     get_nb_max_rounds,
     FedClass,
+    dropout,
 )
 from flamby.datasets.fed_tcga_brca.dataset import FedTcgaBrca, TcgaBrcaRaw
 from flamby.datasets.fed_tcga_brca.metric import metric

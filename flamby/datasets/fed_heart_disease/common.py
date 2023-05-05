@@ -3,11 +3,12 @@ import torch
 from flamby.datasets.fed_heart_disease.dataset import FedHeartDisease
 
 NUM_CLIENTS = 4
-BATCH_SIZE = 4
-NUM_EPOCHS_POOLED = 50
+BATCH_SIZE_POOLED = 32
+BATCH_SIZE = 32
+NUM_EPOCHS_POOLED = 150
 LR = 0.001
-Optimizer = torch.optim.Adam
-
+Optimizer = torch.optim.AdamW
+dropout = 0.2
 FedClass = FedHeartDisease
 
 

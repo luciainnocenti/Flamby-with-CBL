@@ -1,4 +1,5 @@
 import copy
+import pickle
 import random
 import time
 
@@ -6,9 +7,14 @@ import numpy as np
 import pandas as pd
 import torch
 from opacus import PrivacyEngine
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader as dl
+from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
-
+from flamby.consensus.majority_voting import majority_voting_combiner
+from flamby.consensus.max_majority_voting import max_voting_combiner
+from flamby.consensus.staple_combiner import staple_combiner
+from flamby.consensus.uncertainty import uncertainty_combiner, uncertainty_computation
 from flamby.utils import evaluate_model_on_tests
 
 
@@ -27,14 +33,14 @@ def set_seed(seed):
 
 
 def fill_df_with_xp_results(
-    df,
-    perf_dict,
-    hyperparams,
-    method_name,
-    columns_names,
-    results_file,
-    dump=True,
-    pooled=False,
+        df,
+        perf_dict,
+        hyperparams,
+        method_name,
+        columns_names,
+        results_file,
+        dump=True,
+        pooled=False,
 ):
     """Add results to dataframe for a specific strategy with specific hyperparameters.
 
@@ -62,7 +68,7 @@ def fill_df_with_xp_results(
     perf_lines_dicts = df.to_dict("records")
     if pooled:
         assert (
-            len(perf_dict) == 1
+                len(perf_dict) == 1
         ), "Your pooled perf dict has multiple keys this is impossible."
         perf_dict["Pooled Test"] = perf_dict.pop(list(perf_dict)[0])
 
@@ -182,13 +188,13 @@ def find_xps_in_df(df, hyperparameters, sname, num_updates):
 
 
 def init_data_loaders(
-    dataset,
-    pooled=False,
-    batch_size=1,
-    num_workers=1,
-    num_clients=None,
-    batch_size_test=None,
-    collate_fn=None,
+        dataset,
+        pooled=False,
+        batch_size=1,
+        num_workers=1,
+        num_clients=None,
+        batch_size_test=None,
+        collate_fn=None,
 ):
     """
     Initializes the data loaders for the training and test datasets.
@@ -196,6 +202,7 @@ def init_data_loaders(
     if (not pooled) and num_clients is None:
         raise ValueError("num_clients must be specified for the non-pooled data")
     batch_size_test = batch_size if batch_size_test is None else batch_size_test
+    print(f"batch size in init = {batch_size}")
     if not pooled:
         training_dls = [
             dl(
@@ -278,7 +285,7 @@ def get_logfile_name_from_strategy(dataset_name, sname, num_updates, args):
 
 
 def evaluate_model_on_local_and_pooled_tests(
-    m, local_dls, pooled_dl, metric, evaluate_func, return_pred=False
+        m, local_dls, pooled_dl, metric, evaluate_func, return_pred=False
 ):
     """Evaluate the model on a list of dataloaders and on one dataloader using
     the evaluate function given.
@@ -308,7 +315,7 @@ def evaluate_model_on_local_and_pooled_tests(
     pooled_perf_dict = evaluate_func(m, [pooled_dl], metric, return_pred=return_pred)
 
     # Very ugly tuple unpacking in case we return the predictions as well
-    # in thee future the evaluation function should return a dict but there is
+    # in the future the evaluation function should return a dict but there is
     # a lot of refactoring needed
     if return_pred:
         perf_dict, y_true_dict, y_pred_dict = perf_dict
@@ -320,11 +327,6 @@ def evaluate_model_on_local_and_pooled_tests(
             None,
             None,
         )
-
-    print("Per-center performance:")
-    print(perf_dict)
-    print("Performance on pooled test set:")
-    print(pooled_perf_dict)
     return (
         perf_dict,
         pooled_perf_dict,
@@ -335,20 +337,10 @@ def evaluate_model_on_local_and_pooled_tests(
     )
 
 
-def train_single_centric(
-    global_init,
-    train_dl,
-    use_gpu,
-    name,
-    opt_class,
-    learning_rate,
-    loss_class,
-    num_epochs,
-    dp_target_epsilon=None,
-    dp_target_delta=None,
-    dp_max_grad_norm=None,
-    seed=None,
-):
+def train_single_centric(global_init, train_dl, use_gpu, name, opt_class,
+                         learning_rate, loss_class, num_epochs, dp_target_epsilon=None,
+                         dp_target_delta=None, dp_max_grad_norm=None, seed=None,
+                         ):
     """Train the global_init model using train_dl and default parameters.
 
     Parameters
@@ -385,9 +377,9 @@ def train_single_centric(
        The trained model.
     """
     apply_dp = (
-        (dp_target_epsilon is not None)
-        and (dp_max_grad_norm is not None)
-        and (dp_target_delta is not None)
+            (dp_target_epsilon is not None)
+            and (dp_max_grad_norm is not None)
+            and (dp_target_delta is not None)
     )
     if (not apply_dp) and (dp_target_epsilon is not None):
         raise ValueError("Missing argument for DP")
@@ -403,7 +395,9 @@ def train_single_centric(
         device = "cuda"
 
     bloss = loss_class()
-    opt = opt_class(model.parameters(), lr=learning_rate)
+    opt = opt_class(model.parameters(), lr=learning_rate, weight_decay=1e-4)
+    scheduler = ReduceLROnPlateau(optimizer=opt, mode='max', patience=1, verbose=True,
+                                  factor=0.5)
 
     if apply_dp:
         seed = seed if seed is not None else int(time.time())
@@ -422,10 +416,11 @@ def train_single_centric(
             max_grad_norm=dp_max_grad_norm,
             noise_generator=torch.Generator(device).manual_seed(seed),
         )
+    losses = []
+    writer = SummaryWriter(log_dir=f"./runs/locals/{name}", comment=f"single_center_{name}")
+    for epoch in tqdm(range(num_epochs)):
+        for i, (X, y) in enumerate(train_dl):
 
-    grad_norm_history = []
-    for _ in tqdm(range(num_epochs)):
-        for X, y in train_dl:
             if use_gpu:
                 # use GPU if requested and available
                 X = X.cuda()
@@ -433,23 +428,24 @@ def train_single_centric(
             opt.zero_grad()
             y_pred = model(X)
             loss = bloss(y_pred, y)
+            writer.add_scalar("Loss/train", loss.item(), (epoch+1)*(i+1))
             loss.backward()
             opt.step()
-
-            grad_norm = 0
-            for param in model.parameters():
-                grad_norm += torch.linalg.norm(param.grad)
-            grad_norm_history.append(grad_norm)
-
+            losses.append(loss.item())
+    import matplotlib.pyplot as plt
+    plt.plot(losses, label='training loss')
+    plt.legend()
+    plt.savefig(f'./{name}_loss.png')
+    plt.close()
     return model
 
 
 def init_xp_plan(
-    num_clients,
-    nlocal,
-    single_centric_baseline=None,
-    strategy=None,
-    compute_ensemble_perf=False,
+        num_clients,
+        nlocal,
+        single_centric_baseline=None,
+        strategy=None,
+        compute_ensemble_perf=False,
 ):
     """_summary_
 
@@ -516,31 +512,15 @@ def init_xp_plan(
     return do_baselines, do_strategy, compute_ensemble_perf
 
 
+# TODO ======= function for ensembling =======
 def ensemble_perf_from_predictions(
-    y_true_dicts, y_pred_dicts, num_clients, metric, num_clients_test=None
+        strategy, y_true_dicts, y_pred_dicts, saved_models,
+        num_clients, metric, weights, task, proj_dir, num_clients_test=None
 ):
-    """_summary_
 
-    Parameters
-    ----------
-    y_true_dicts : dict
-        The ground truth dicts for all clients
-    y_pred_dicts :dict
-        The prediction array for all models and clients.
-    num_clients : int
-        The number of clients
-    metric : callable
-        (torch.Tensor, torch.Tensor) -> [0, 1.]
-    num_clients_test: int
-        When testing on pooled.
-
-    Returns
-    -------
-    dict
-        A dict with the predictions of all ensembles
-    """
     print("Computing ensemble performance")
     ensemble_perf = {}
+    ensemble_true = {}
     if num_clients_test is None:
         num_clients_test = num_clients
     for testset_idx in range(num_clients_test):
@@ -553,23 +533,28 @@ def ensemble_perf_from_predictions(
 
         # Since they are all the same we use the first one
         # for this specific tests as the ground truth
-        ensemble_true = y_true_dicts["Local 0"][f"client_test_{testset_idx}"]
+        ensemble_true[f"client_test_{testset_idx}"] = y_true_dicts["Local 0"][f"client_test_{testset_idx}"]
 
-        # Accumulating predictions
-        ensemble_pred = y_pred_dicts["Local 0"][f"client_test_{testset_idx}"]
-        for model_idx in range(1, num_clients):
-            ensemble_pred += y_pred_dicts[f"Local {model_idx}"][
-                f"client_test_{testset_idx}"
-            ]
-        ensemble_pred /= float(num_clients)
-        ensemble_perf[f"client_test_{testset_idx}"] = metric(
-            ensemble_true, ensemble_pred
-        )
+    # Retrieve the predictions from the ensembling function
+    if strategy == "mav":
+        ensemble_pred = majority_voting_combiner(task=task, preds_concs=y_pred_dicts)
+    elif strategy == 'staple':
+        ensemble_pred = staple_combiner(task=task, preds_concs=y_pred_dicts)
+    elif strategy == 'uncertainty':
+        ensemble_pred = uncertainty_combiner(task=task, preds_concs=y_pred_dicts,
+                                             scores=weights, project_dir=proj_dir)
+    elif strategy == "maxv":
+        ensemble_pred = max_voting_combiner(task=task, preds_concs=y_pred_dicts)
+    else:
+        return -1
+    for testset_idx in range(num_clients_test):
+        test_set = f"client_test_{testset_idx}"
+        ensemble_perf[f"client_test_{testset_idx}"] = metric(ensemble_true[test_set], np.array(ensemble_pred[test_set]))
     return ensemble_perf
 
 
 def set_dataset_specific_config(
-    dataset_name, compute_ensemble_perf=False, use_gpu=True
+        dataset_name, compute_ensemble_perf=False, use_gpu=True
 ):
     """_summary_
 
@@ -591,30 +576,30 @@ def set_dataset_specific_config(
         batch_size_test = 1
         from flamby.datasets.fed_lidc_idri import evaluate_dice_on_tests_by_chunks
 
-        def evaluate_func(m, test_dls, metric, use_gpu=use_gpu, return_pred=False):
-            dice_dict = evaluate_dice_on_tests_by_chunks(m, test_dls, use_gpu)
+        def evaluate_func(m, test_dls, metric, use_gpu=use_gpu, return_pred=False, dropout=False):
+            dice_dict = evaluate_dice_on_tests_by_chunks(m, test_dls, use_gpu, dropout=dropout)
             if return_pred:
                 return dice_dict, None, None
             return dice_dict
 
-        compute_ensemble_perf = False
+        compute_ensemble_perf = True
     elif dataset_name == "fed_kits19":
         from flamby.datasets.fed_kits19 import evaluate_dice_on_tests
 
-        batch_size_test = 2
+        batch_size_test = 1
 
-        def evaluate_func(m, test_dls, metric, use_gpu=use_gpu, return_pred=False):
-            dice_dict = evaluate_dice_on_tests(m, test_dls, metric, use_gpu)
+        def evaluate_func(m, test_dls, metric, use_gpu=use_gpu, return_pred=False, dropout=False):
+            dice_dict = evaluate_dice_on_tests(m, test_dls, metric, use_gpu, dropout=dropout)
             if return_pred:
                 return dice_dict, None, None
             return dice_dict
 
-        compute_ensemble_perf = False
+        compute_ensemble_perf = True
 
     elif dataset_name == "fed_ixi":
         batch_size_test = 1
         evaluate_func = evaluate_model_on_tests
-        compute_ensemble_perf = False
+        compute_ensemble_perf = True
 
     else:
         batch_size_test = None

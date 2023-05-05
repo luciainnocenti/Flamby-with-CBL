@@ -18,7 +18,7 @@ def metric(y_true, y_pred):
     return np.mean(dice)
 
 
-def evaluate_dice_on_tests_by_chunks(model, test_dataloaders, use_gpu=True, nchunks=4):
+def evaluate_dice_on_tests_by_chunks(model, test_dataloaders, use_gpu=True, dropout=False, nchunks=4):
     """This function takes a pytorch model and evaluate it on a list of\
     dataloaders using the dice coefficient. The dice coefficient is computed by splitting
     the list of patches in chunks, to fit in memory.
@@ -42,7 +42,10 @@ def evaluate_dice_on_tests_by_chunks(model, test_dataloaders, use_gpu=True, nchu
     """
     results_dict = {}
     with torch.no_grad():
-        model.eval()
+        if not dropout:
+            model.eval()
+        else:
+            model.train()
         for i in tqdm(range(len(test_dataloaders))):
             test_dataloader_iterator = iter(test_dataloaders[i])
             dices = []

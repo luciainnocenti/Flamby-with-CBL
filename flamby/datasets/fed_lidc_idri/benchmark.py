@@ -18,6 +18,7 @@ from flamby.datasets.fed_lidc_idri import (
     FedLidcIdri,
     collate_fn,
     evaluate_dice_on_tests_by_chunks,
+    dropout,
 )
 
 
@@ -73,7 +74,7 @@ def main(num_workers_torch, use_gpu=True, gpu_id=0, log=False, debug=False):
         # At each new seed we re-initialize the model
         # and training_dl is shuffled as well
         torch.manual_seed(seed)
-        m = Baseline()
+        m = Baseline(dropout=dropout)
         # Transfer to GPU if possible
         if torch.cuda.is_available() and use_gpu:
             m = m.cuda()

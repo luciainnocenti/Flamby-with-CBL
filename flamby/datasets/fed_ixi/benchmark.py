@@ -17,6 +17,7 @@ from flamby.datasets.fed_ixi import (
     BaselineLoss,
     FedIXITiny,
     metric,
+    dropout,
 )
 from flamby.utils import evaluate_model_on_tests
 
@@ -84,6 +85,7 @@ def main(num_workers_torch, use_gpu=True, gpu_id=0, log=False):
             upsampling_type="linear",
             padding=True,
             activation="PReLU",
+            dropout=dropout
         )
         # Transfer to GPU if possible
         if torch.cuda.is_available() and use_gpu:

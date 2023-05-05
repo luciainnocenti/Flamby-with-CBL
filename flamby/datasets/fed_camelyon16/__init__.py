@@ -6,6 +6,7 @@ from flamby.datasets.fed_camelyon16.common import (
     get_nb_max_rounds,
     Optimizer,
     FedClass,
+    dropout,
 )
 from flamby.datasets.fed_camelyon16.dataset import (
     Camelyon16Raw,

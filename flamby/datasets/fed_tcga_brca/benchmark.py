@@ -14,6 +14,7 @@ from flamby.datasets.fed_tcga_brca import (
     BaselineLoss,
     FedTcgaBrca,
     metric,
+    dropout,
 )
 from flamby.utils import evaluate_model_on_tests
 
@@ -163,7 +164,7 @@ def main(args):
         dataloaders = {"train": train_dataloader, "test": test_dataloader}
         dataset_sizes = {"train": len(train_dataset), "test": len(test_dataset)}
 
-        model = Baseline()
+        model = Baseline(dropout=dropout)
         model = model.to(device)
         optimizer = torch.optim.Adam(model.fc.parameters(), lr=LR)
         scheduler = torch.optim.lr_scheduler.MultiStepLR(
