@@ -3,7 +3,8 @@
 
 
 ## Table of Contents
-- [Overview](#overview)
+- [FLamby with CBL](#cbl)
+- [FLamby Overview](#overview)
 - [Dataset suite](#dataset-suite)
 - [Installation](#installation)
 - [Usage](#usage)
@@ -12,10 +13,32 @@
 - [Team](#team)
 - [Acknowledgements](#acknowledgements)
 
+## FLamby with consensus-based learning
+This repository extends the FLamby benchmark to the consensus-based collaborative learning (CBL) paradigm as presented in Innocenti et al. (2024).
+As presented in the related [paper](https://www.biorxiv.org/content/10.1101/2024.05.27.596048v1.abstract), CBL is an alternative to federated learning for collaborative learning. 
+Given a test point, CBL combines predictions obtained from the different models trained independently by each client on local data. Therefore, CBL is based on an offline routine, where information is exchanged only during inference. 
 
-## Overview
+It is possible to reproduce the results of the paper by following FLamby's steps to obtain the datasets, and then run fed_benchmarking:
+```
+cd flamby/benchmarks
+python fed_benchmark.py --seed 42 -cfp ../config_dataset.json
+```
+When the training of local models is finished, they will saved locally to be used asynchronously to do CBL.
+
+## CBL Methods
+
+The repository contains the implementation for CBL methods:
+- average
+- majority vote
+- staple (for segmentation tasks)
+- uncertainty-based ensemble (UBE)
+- autoencoder-based ensemble (ABE)
+
+More information on the methods is available in the related [paper](https://www.biorxiv.org/content/10.1101/2024.05.27.596048v1.abstract).
+
+## FLamby Overview
 FLamby is a benchmark for cross-silo Federated Learning with natural partitioning,
-currently focused in healthcare applications.
+currently focused on healthcare applications.
 It spans multiple data modalities and should allow easy interfacing with most
 Federated Learning frameworks (including [Fed-BioMed](https://gitlab.inria.fr/fedbiomed/fedbiomed), [FedML](https://github.com/FedML-AI/FedML), [Substra](https://docs.substra.org/en/stable/)...).
 It contains implementations of different
