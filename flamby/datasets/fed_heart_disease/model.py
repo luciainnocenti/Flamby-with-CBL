@@ -1,9 +1,8 @@
 import torch
 import torch.nn as nn
 
-
 class Baseline_old(nn.Module):
-    def __init__(self, dropout, input_dim=13, output_dim=1):
+    def __init__(self, dropout, input_dim=18, output_dim=1):
         super(Baseline_old, self).__init__()
         self.dropout = dropout
         if self.dropout == 0:
@@ -15,6 +14,7 @@ class Baseline_old(nn.Module):
             self.layer2 = nn.Linear(int(input_dim / 2), output_dim)
 
     def forward(self, x):
+        x = x.type(torch.float32)
         if self.dropout == 0:
             return torch.sigmoid(self.linear(x))
         else:
@@ -29,18 +29,18 @@ class Baseline_old(nn.Module):
 class Baseline(nn.Module):
     def __init__(self, dropout, input_dim=18, output_dim=2):
         super(Baseline, self).__init__()
-        self.fc1 = nn.Linear(18, 32)
-        self.fc2 = nn.Linear(32, 64)
-        self.fc3 = nn.Linear(64, 32)
+        self.fc1 = nn.Linear(13, 32)
+        # self.fc2 = nn.Linear(32, 64)
+        # self.fc3 = nn.Linear(64, 32)
         self.fc4 = nn.Linear(32, 2)
         self.act = nn.LeakyReLU()
-        self.dropout = nn.Dropout(0.1)
+        self.dropout = nn.Dropout(0.05)
 
     def forward(self, x):
         x = x.type(torch.float32)
         x = self.act(self.fc1(x))
-        x = self.act(self.fc2(x))
-        x = self.act(self.fc3(x))
+        # x = self.act(self.fc2(x))
+        # x = self.act(self.fc3(x))
         x = self.dropout(x)
         x = self.fc4(x)
         return x
