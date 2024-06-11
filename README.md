@@ -1,6 +1,4 @@
 # FLamby
-<img src="/docs/logo.png" width="600">
-
 
 ## Table of Contents
 - [FLamby with CBL](#cbl)
@@ -15,7 +13,7 @@
 - [Acknowledgements](#acknowledgements)
 
 ## FLamby with consensus-based learning
-<img src="/docs/img/CLMethods.png" width="600">
+<img src="/docs/img/CLMethods.png">
 This repository extends the FLamby benchmark to the consensus-based collaborative learning (CBL) paradigm as presented in Innocenti et al. (2024).
 As presented in the related [paper](https://www.biorxiv.org/content/10.1101/2024.05.27.596048v1.abstract), CBL is an alternative to federated learning for collaborative learning. 
 Given a test point, CBL combines predictions obtained from the different models trained independently by each client on local data. Therefore, CBL is based on an offline routine, where information is exchanged only during inference. 
