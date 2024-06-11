@@ -5,6 +5,7 @@
 ## Table of Contents
 - [FLamby with CBL](#cbl)
 - [FLamby Overview](#overview)
+- [CBL Methods](#methods)
 - [Dataset suite](#dataset-suite)
 - [Installation](#installation)
 - [Usage](#usage)
