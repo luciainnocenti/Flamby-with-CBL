@@ -2,19 +2,14 @@ import copy
 import pickle
 import random
 import time
-
+import os
 import numpy as np
 import pandas as pd
 import torch
 from opacus import PrivacyEngine
-from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader as dl
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
-from flamby.consensus.majority_voting import majority_voting_combiner
-from flamby.consensus.max_majority_voting import max_voting_combiner
-from flamby.consensus.staple_combiner import staple_combiner
-from flamby.consensus.uncertainty import uncertainty_combiner, uncertainty_computation
 from flamby.utils import evaluate_model_on_tests
 
 
@@ -201,13 +196,13 @@ def init_data_loaders(
     """
     if (not pooled) and num_clients is None:
         raise ValueError("num_clients must be specified for the non-pooled data")
+
     batch_size_test = batch_size if batch_size_test is None else batch_size_test
-    print(f"batch size in init = {batch_size}")
     if not pooled:
         training_dls = [
             dl(
                 dataset(center=i, train=True, pooled=False),
-                batch_size=batch_size,
+                batch_size=batch_size if isinstance(batch_size, int) else batch_size[f'Local {i}'],
                 shuffle=True,
                 num_workers=num_workers,
                 collate_fn=collate_fn,
@@ -312,7 +307,7 @@ def evaluate_model_on_local_and_pooled_tests(
     """
 
     perf_dict = evaluate_func(m, local_dls, metric, return_pred=return_pred)
-    pooled_perf_dict = evaluate_func(m, [pooled_dl], metric, return_pred=return_pred)
+    pooled_perf_dict = [None, None, None]  #  evaluate_func(m, [pooled_dl], metric, return_pred=return_pred)
 
     # Very ugly tuple unpacking in case we return the predictions as well
     # in the future the evaluation function should return a dict but there is
@@ -396,8 +391,6 @@ def train_single_centric(global_init, train_dl, use_gpu, name, opt_class,
 
     bloss = loss_class()
     opt = opt_class(model.parameters(), lr=learning_rate, weight_decay=1e-4)
-    scheduler = ReduceLROnPlateau(optimizer=opt, mode='max', patience=1, verbose=True,
-                                  factor=0.5)
 
     if apply_dp:
         seed = seed if seed is not None else int(time.time())
@@ -418,9 +411,16 @@ def train_single_centric(global_init, train_dl, use_gpu, name, opt_class,
         )
     losses = []
     writer = SummaryWriter(log_dir=f"./runs/locals/{name}", comment=f"single_center_{name}")
+    if os.path.exists(f'./{name}_checkpoint.pt'):
+        checkpoint = torch.load(f'./{name}_checkpoint.pt')
+        model.load_state_dict(checkpoint['model_state_dict'])
+        opt.load_state_dict(checkpoint['optimizer_state_dict'])
+        epoch = checkpoint['epoch']
+        num_epochs = num_epochs - epoch
+        print('restarting at epoch ', epoch)
+        loss = checkpoint['loss']
     for epoch in tqdm(range(num_epochs)):
         for i, (X, y) in enumerate(train_dl):
-
             if use_gpu:
                 # use GPU if requested and available
                 X = X.cuda()
@@ -428,10 +428,16 @@ def train_single_centric(global_init, train_dl, use_gpu, name, opt_class,
             opt.zero_grad()
             y_pred = model(X)
             loss = bloss(y_pred, y)
-            writer.add_scalar("Loss/train", loss.item(), (epoch+1)*(i+1))
+            writer.add_scalar("Loss/train", loss.item(), (epoch + 1) * (i + 1))
             loss.backward()
             opt.step()
             losses.append(loss.item())
+        torch.save({
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': opt.state_dict(),
+            'loss': loss,
+        }, f'./{name}_checkpoint.pt')
     import matplotlib.pyplot as plt
     plt.plot(losses, label='training loss')
     plt.legend()
@@ -472,7 +478,7 @@ def init_xp_plan(
     """
     do_strategy = True
     do_baselines = {"Pooled": True}
-    for i in range(num_clients):
+    for i in range(num_clients):  # range(num_clients):
         do_baselines[f"Local {i}"] = True
     # Single client baseline computation
     if single_centric_baseline is not None:
@@ -483,12 +489,13 @@ def init_xp_plan(
             )
             compute_ensemble_perf = False
         do_baselines = {"Pooled": False}
-        for i in range(num_clients):
+        for i in range(num_clients):  # range(num_clients):
             do_baselines[f"Local {i}"] = False
         if single_centric_baseline == "Pooled":
             do_baselines[single_centric_baseline] = True
         elif single_centric_baseline == "Local":
             assert nlocal in range(num_clients), "The client you chose does not exist"
+                   # range(num_clients)
             do_baselines[single_centric_baseline + " " + str(nlocal)] = True
         # If we do a single-centric baseline we don't do the strategies
         do_strategy = False
@@ -510,47 +517,6 @@ def init_xp_plan(
             "Cannot compute ensemble performance if training on only one local"
         )
     return do_baselines, do_strategy, compute_ensemble_perf
-
-
-# TODO ======= function for ensembling =======
-def ensemble_perf_from_predictions(
-        strategy, y_true_dicts, y_pred_dicts, saved_models,
-        num_clients, metric, weights, task, proj_dir, num_clients_test=None
-):
-
-    print("Computing ensemble performance")
-    ensemble_perf = {}
-    ensemble_true = {}
-    if num_clients_test is None:
-        num_clients_test = num_clients
-    for testset_idx in range(num_clients_test):
-        # Small safety net
-        for model_idx in range(1, num_clients):
-            assert (
-                y_true_dicts[f"Local {0}"][f"client_test_{testset_idx}"]
-                == y_true_dicts[f"Local {model_idx}"][f"client_test_{testset_idx}"]
-            ).all(), "Models in the ensemble have different ground truths"
-
-        # Since they are all the same we use the first one
-        # for this specific tests as the ground truth
-        ensemble_true[f"client_test_{testset_idx}"] = y_true_dicts["Local 0"][f"client_test_{testset_idx}"]
-
-    # Retrieve the predictions from the ensembling function
-    if strategy == "mav":
-        ensemble_pred = majority_voting_combiner(task=task, preds_concs=y_pred_dicts)
-    elif strategy == 'staple':
-        ensemble_pred = staple_combiner(task=task, preds_concs=y_pred_dicts)
-    elif strategy == 'uncertainty':
-        ensemble_pred = uncertainty_combiner(task=task, preds_concs=y_pred_dicts,
-                                             scores=weights, project_dir=proj_dir)
-    elif strategy == "maxv":
-        ensemble_pred = max_voting_combiner(task=task, preds_concs=y_pred_dicts)
-    else:
-        return -1
-    for testset_idx in range(num_clients_test):
-        test_set = f"client_test_{testset_idx}"
-        ensemble_perf[f"client_test_{testset_idx}"] = metric(ensemble_true[test_set], np.array(ensemble_pred[test_set]))
-    return ensemble_perf
 
 
 def set_dataset_specific_config(
@@ -589,11 +555,12 @@ def set_dataset_specific_config(
         batch_size_test = 1
 
         def evaluate_func(m, test_dls, metric, use_gpu=use_gpu, return_pred=False, dropout=False):
-            dice_dict = evaluate_dice_on_tests(m, test_dls, metric, use_gpu, dropout=dropout)
+            dice_dict, y_preds = evaluate_dice_on_tests(m, test_dls, metric, use_gpu, dropout=dropout)
             if return_pred:
-                return dice_dict, None, None
+                return dice_dict, None, y_preds
             return dice_dict
 
+        # evaluate_func = evaluate_model_on_tests
         compute_ensemble_perf = True
 
     elif dataset_name == "fed_ixi":

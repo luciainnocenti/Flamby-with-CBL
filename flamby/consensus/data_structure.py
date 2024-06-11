@@ -1,15 +1,18 @@
 from scipy.special import softmax
+import pickle
 
 
 def normalizer(to_norm: bool):
     if to_norm:
-        return lambda x: x
-    else:
         return softmax
+    else:
+        return lambda x: x
 
 
 def create_data_structure(y_pred_dicts, y_true_dicts, to_norm=False):
     clients = list(y_pred_dicts.keys())
+    if y_pred_dicts[clients[0]] is None:
+        return None, None
     test_sets = list(y_pred_dicts[clients[0]].keys())
     preds_concs = {}
     m = normalizer(to_norm=to_norm)

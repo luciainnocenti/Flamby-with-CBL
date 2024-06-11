@@ -1,6 +1,8 @@
 import argparse
 import copy
+import os
 import pickle
+import pytz
 
 import numpy as np
 import pandas as pd
@@ -8,7 +10,6 @@ import torch
 
 import flamby.strategies as strats
 from flamby.benchmarks.benchmark_utils import (
-    ensemble_perf_from_predictions,
     evaluate_model_on_local_and_pooled_tests,
     fill_df_with_xp_results,
     find_xps_in_df,
@@ -27,10 +28,12 @@ from flamby.benchmarks.conf import (
 )
 from flamby.consensus.data_structure import create_data_structure
 from flamby.consensus.uncertainty import uncertainty_computation
+from flamby.consensus.autoencoder import train_autoencoder_image, train_autoencoder_tabular, ae_weights_computation
 from flamby.gpu_utils import use_gpu_idx
-from flamby.benchmarks.ensemble_utils import get_task, train_autoencoder_tabular, train_autoencoder_image, \
-    get_ensemble_methods
-from flamby.utils import evaluate_autoencoder_on_tests
+from flamby.benchmarks.ensemble_utils import get_task, get_ensemble_methods
+from flamby.consensus.ensemblings import ensemble_perf_from_predictions, ensemble_perf_from_models
+
+from datetime import datetime
 
 
 def main(args_cli):
@@ -54,8 +57,12 @@ def main(args_cli):
     """
     # Use the same initialization for everyone in order to be fair
     set_seed(args_cli.seed)
-
+    do_locals = True
+    do_ensemble = True
+    do_feder = False
+    do_pooled = False
     use_gpu = use_gpu_idx(args_cli.GPU, args_cli.cpu_only)
+    dev = torch.device("cuda:0" if use_gpu else "cpu")
     print(f"use gpu = {use_gpu}")
     hyperparameters_names = [
         "learning_rate",
@@ -65,9 +72,9 @@ def main(args_cli):
         "deterministic",
     ]
     hyperparameters_changed = [
-        e is not None
-        for e in [args_cli.learning_rate, args_cli.server_learning_rate, args_cli.mu]
-    ] + [args_cli.optimizer_class != "torch.optim.SGD", args_cli.deterministic]
+                                  e is not None
+                                  for e in [args_cli.learning_rate, args_cli.server_learning_rate, args_cli.mu]
+                              ] + [args_cli.optimizer_class != "torch.optim.SGD", args_cli.deterministic]
     if (args_cli.strategy is None) and any(hyperparameters_changed):
         hyperparameters_changed = [
             hyperparameters_names[i]
@@ -84,16 +91,14 @@ def main(args_cli):
             ", otherwise modify the config file directly."
         )
     # Find a way to provide it through hyperparameters
-    run_num_updates = [20]
+    run_num_updates = [10]  # ,30,50,100]
 
     # ensure that the config provided by the user is ok
     config = check_config(args_cli.config_file_path)
 
     dataset_name = config["dataset"]
     task = get_task(dataset_name)
-    import os
-    PROJECT_DIR = os.path.join(os.getcwd(), dataset_name)
-    os.makedirs(PROJECT_DIR, exist_ok=True)
+
     # get all the dataset specific handles
     (
         FedDataset,
@@ -115,6 +120,7 @@ def main(args_cli):
     print(f"optimizer = {Optimizer}")
     print(f'dataset_name = {dataset_name}, task = {task}')
     nrounds_list = [get_nb_max_rounds(num_updates) for num_updates in run_num_updates]
+    print(f"rounds number = {nrounds_list}")
     if BATCH_SIZE_POOLED is None:
         BATCH_SIZE_POOLED = BATCH_SIZE
     if args_cli.debug:
@@ -127,7 +133,7 @@ def main(args_cli):
 
     # We can now instantiate the dataset specific model on CPU
     global_init = Baseline(dropout=dropout)
-
+    #global_init.load_state_dict(torch.load(f"flamby/datasets/{dataset_name}/pretrained/net_checkpoint.pt")['model_state_dict'])
     # We parse the hyperparams from the config or from the CLI if strategy is given
     strategy_specific_hp_dicts = get_strategies(
         config, learning_rate=LR, args=vars(args_cli)
@@ -161,11 +167,13 @@ def main(args_cli):
     # We compute the number of local and ensemble performances we should have
     # in the results dataframe
     nb_local_and_ensemble_xps = (NUM_CLIENTS + int(compute_ensemble_perf)) * (
-        NUM_CLIENTS + 1
+            NUM_CLIENTS + 1
     )
 
     # We init dataloader for train and test and for local and pooled datasets
-
+    if dataset_name == "fed_isic2019":
+        BATCH_SIZE = {'Local 0': 128, 'Local 1': 128, 'Local 2': 64, 'Local 3': 32,
+                      'Local 4': 32, 'Local 5': 32}
     training_dls, test_dls = init_data_loaders(
         dataset=FedDataset,
         pooled=False,
@@ -175,6 +183,7 @@ def main(args_cli):
         batch_size_test=1,  # batch_size_test,
         collate_fn=collate_fn,
     )
+
     train_pooled, test_pooled = init_data_loaders(
         dataset=FedDataset,
         pooled=True,
@@ -183,6 +192,7 @@ def main(args_cli):
         batch_size_test=1,  # batch_size_test,
         collate_fn=collate_fn,
     )
+    dimensions = [len(test_dl) for test_dl in test_dls]
 
     # Check if some results are already computed
     results_file = get_results_file(config, path=args_cli.results_file_path)
@@ -214,17 +224,18 @@ def main(args_cli):
     # We check if we have already the results for pooled
     index_of_interest = df.loc[
         (df["Method"] == "Pooled Training") & (df["seed"] == args_cli.seed)
-    ].index
-
+        ].index
     if compute_ensemble_perf:
         ensembling_strategies = get_ensemble_methods(task) if args_cli.ensemble_strategies is None \
             else args_cli.ensemble_strategies
     else:
         ensembling_strategies = None
-    print(f"Ensembling strategies = {ensembling_strategies}")
+
+    # ensembling_strategies = ['mav']
+    print(f"Ensembling strategies = {ensembling_strategies}, compute ens = {compute_ensemble_perf}")
 
     # There is no use in running the experiment if it is already found
-    if (len(index_of_interest) < (NUM_CLIENTS + 1)) and do_baselines["Pooled"]:
+    if (len(index_of_interest) < (NUM_CLIENTS + 1)) and do_baselines["Pooled"] and do_pooled:
         # dealing with edge case that shouldn't happen
         # If some of the rows are there but not all of them we redo the
         # experiments
@@ -233,21 +244,33 @@ def main(args_cli):
         m = copy.deepcopy(global_init)
 
         set_seed(args_cli.seed)
-        print(f'Training pooled method')
-        m = train_single_centric(
-            m,
-            train_pooled,
-            use_gpu,
-            f"{dataset_name}_Pooled",
-            pooled_hyperparameters["optimizer_class"],
-            pooled_hyperparameters["learning_rate"],
-            BaselineLoss,
-            2*NUM_EPOCHS_POOLED,
-            dp_target_epsilon=pooled_hyperparameters["dp_target_epsilon"],
-            dp_target_delta=pooled_hyperparameters["dp_target_delta"],
-            dp_max_grad_norm=pooled_hyperparameters["dp_max_grad_norm"],
-            seed=args_cli.seed,
-        )
+        if os.path.exists(f"state_dict_{dataset_name}_pooled"):
+            print("Loading pooled trained method")
+            m.load_state_dict(torch.load(f"state_dict_{dataset_name}_pooled",
+                                         map_location=torch.device(dev)))
+        else:
+            print(f'Training pooled method')
+            dt1 = datetime.now(tz=pytz.timezone('Europe/Rome'))
+            m = train_single_centric(
+                m,
+                train_pooled,
+                use_gpu,
+                f"{dataset_name}_Pooled",
+                pooled_hyperparameters["optimizer_class"],
+                pooled_hyperparameters["learning_rate"],
+                BaselineLoss,
+                NUM_EPOCHS_POOLED,
+                dp_target_epsilon=pooled_hyperparameters["dp_target_epsilon"],
+                dp_target_delta=pooled_hyperparameters["dp_target_delta"],
+                dp_max_grad_norm=pooled_hyperparameters["dp_max_grad_norm"],
+                seed=args_cli.seed,
+            )
+            dt2 = datetime.now(tz=pytz.timezone('Europe/Rome'))
+            t = (dt2 - dt1).total_seconds()
+            f = open(f"training_times_{dataset_name}.txt", "a")
+            f.write(f"Pooled training: {t}\n")
+            f.close()
+            torch.save(m.state_dict(), f"state_dict_{dataset_name}_pooled")
         (
             perf_dict,
             pooled_perf_dict,
@@ -259,6 +282,8 @@ def main(args_cli):
             m, test_dls, test_pooled, metric, evaluate_func
         )
 
+        perf_dict['weighted_average'] = np.average(list(perf_dict.values()), weights=dimensions)
+        perf_dict['average'] = np.average(list(perf_dict.values()))
         df = fill_df_with_xp_results(
             df,
             perf_dict,
@@ -280,7 +305,7 @@ def main(args_cli):
     # We check if we have the results for local trainings and possibly ensemble as well
     index_of_interest = df.loc[
         (df["Method"] == "Local 0") & (df["seed"] == args_cli.seed)
-    ].index
+        ].index
     for i in range(1, NUM_CLIENTS):
         index_of_interest = index_of_interest.union(
             df.loc[(df["Method"] == f"Local {i}") & (df["seed"] == args_cli.seed)].index
@@ -289,7 +314,7 @@ def main(args_cli):
         df.loc[(df["Method"] == "Ensemble") & (df["seed"] == args_cli.seed)].index
     )
 
-    if len(index_of_interest) < nb_local_and_ensemble_xps:
+    if len(index_of_interest) < nb_local_and_ensemble_xps and do_locals:
         # The fact that we are here means some local experiments are missing or
         # we need to compute ensemble as well so we need to redo all local experiments
         y_true_dicts = {}
@@ -297,16 +322,17 @@ def main(args_cli):
         pooled_y_true_dicts = {}
         pooled_y_pred_dicts = {}
         saved_models = {}
-        ae_models = {} if 'ae' in ensembling_strategies and compute_ensemble_perf else None
+        ae_data_models = {} if 'ae_data' in ensembling_strategies and compute_ensemble_perf else None
+        ae_label_models = {} if 'ae_label' in ensembling_strategies and compute_ensemble_perf else None
         for i in range(NUM_CLIENTS):
             index_of_interest = df.loc[
                 (df["Method"] == f"Local {i}") & (df["seed"] == args_cli.seed)
-            ].index
+                ].index
             # We do the experiments only if results are not found, or we need
             # ensemble performances AND this experiment is planned.
             # i.e. we allow to not do anything else if the user specify
             if (
-                (len(index_of_interest) < (NUM_CLIENTS + 1)) or compute_ensemble_perf
+                    (len(index_of_interest) < (NUM_CLIENTS + 1)) or compute_ensemble_perf
             ) and do_baselines[f"Local {i}"]:
                 if len(index_of_interest) > 0:
                     df.drop(index_of_interest, inplace=True)
@@ -315,127 +341,140 @@ def main(args_cli):
                 method_name = f"Local {i}"
                 set_seed(args_cli.seed)
                 print(f'Training {method_name} method')
-                m = train_single_centric(
-                    m,
-                    training_dls[i],
-                    use_gpu,
-                    f"{dataset_name}_Local_{i}",
-                    pooled_hyperparameters["optimizer_class"],
-                    pooled_hyperparameters["learning_rate"],
-                    BaselineLoss,
-                    NUM_EPOCHS_POOLED,
-                    dp_target_epsilon=pooled_hyperparameters["dp_target_epsilon"],
-                    dp_target_delta=pooled_hyperparameters["dp_target_delta"],
-                    dp_max_grad_norm=pooled_hyperparameters["dp_max_grad_norm"],
-                    seed=args_cli.seed,
-                )
+                if os.path.exists(f"state_dict_{dataset_name}_local_{i}"):
+                    print("Loading trained method")
 
+                    m.load_state_dict(torch.load(f"state_dict_{dataset_name}_local_{i}",
+                                                 map_location=torch.device(dev))
+                                      )
+                else:
+                    dt1 = datetime.now(tz=pytz.timezone('Europe/Rome'))
+
+                    m = train_single_centric(
+                        m,
+                        training_dls[i],
+                        use_gpu,
+                        f"{dataset_name}_Local_{i}",
+                        pooled_hyperparameters["optimizer_class"],
+                        pooled_hyperparameters["learning_rate"],
+                        BaselineLoss,
+                        int(NUM_EPOCHS_POOLED / NUM_CLIENTS),
+                        dp_target_epsilon=pooled_hyperparameters["dp_target_epsilon"],
+                        dp_target_delta=pooled_hyperparameters["dp_target_delta"],
+                        dp_max_grad_norm=pooled_hyperparameters["dp_max_grad_norm"],
+                        seed=args_cli.seed,
+                    )
+                    dt2 = datetime.now(tz=pytz.timezone('Europe/Rome'))
+                    t = (dt2 - dt1).total_seconds()
+                    f = open(f"training_times_{dataset_name}.txt", "a")
+                    f.write(f"Local_{i} training: {t}\n")
+                    f.close()
+                    torch.save(m.state_dict(), f"state_dict_{dataset_name}_local_{i}")
                 (
-                    perf_dict,
-                    pooled_perf_dict,
-                    y_true_dicts[f"Local {i}"],
-                    y_pred_dicts[f"Local {i}"],
-                    pooled_y_true_dicts[f"Local {i}"],
-                    pooled_y_pred_dicts[f"Local {i}"],
-                ) = evaluate_model_on_local_and_pooled_tests(
+                    perf_dict, pooled_perf_dict, y_true_dicts[f"Local {i}"], y_pred_dicts[f"Local {i}"], pooled_y_true_dicts[f"Local {i}"], pooled_y_pred_dicts[f"Local {i}"]) = evaluate_model_on_local_and_pooled_tests(
                     m, test_dls, test_pooled, metric, evaluate_func, return_pred=True
                 )
-                dimensions = [len(y_pred_dicts[f'Local {i}'][ts]) for ts in y_pred_dicts[f'Local {i}'].keys()]
-                print(f'dimensions = {dimensions}')
-                perf_dict['weighted_average'] = np.average(list(perf_dict.values()), weights=dimensions)
-                perf_dict['average'] = np.average(list(perf_dict.values()))
+                # perf_dict['weighted_average'] = np.average(list(perf_dict.values()), weights=dimensions)
+                # perf_dict['average'] = np.average(list(perf_dict.values()))
                 if compute_ensemble_perf:
                     saved_models[f"Local {i}"] = copy.deepcopy(m)
-                    if 'ae' in ensembling_strategies:
-                        if task == 'tab_classification':
-                            ae_m = train_autoencoder_tabular(dataloader=training_dls[i])
-
-                        elif task == 'img_classification':
-                            ae_m = train_autoencoder_image(dataloader=training_dls[i], modality='image')
-                        else:
-                            ae_m = (
-                                train_autoencoder_image(dataloader=training_dls[i], modality='image'),
-                                train_autoencoder_image(dataloader=training_dls[i], modality='label')
-                            )
-                        ae_models[f"Local {i}"] = ae_m
-                df = fill_df_with_xp_results(
-                    df,
-                    perf_dict,
-                    pooled_hyperparameters,
-                    method_name,
-                    columns_names,
-                    results_file,
-                )
-                df = fill_df_with_xp_results(
-                    df,
-                    pooled_perf_dict,
-                    pooled_hyperparameters,
-                    method_name,
-                    columns_names,
-                    results_file,
-                    pooled=True,
-                )
-
+                    if 'ae_data' in ensembling_strategies:
+                        if task in ['tab_classification', 'tab_regression']:
+                            ae_data_models[f"Local_{i}"] = train_autoencoder_tabular(dataloader=training_dls[i],
+                                                                                     dataset_name=dataset_name, i=i)
+                        elif task in ['img_classification', 'segmentation']:
+                            ae_data_models[f"Local_{i}"] = train_autoencoder_image(dataloader=training_dls[i],
+                                                                                   modality='image', task=task,
+                                                                                   dataset_name=dataset_name, i=i)
+                    if 'ae_label' in ensembling_strategies:
+                        ae_label_models[f"Local_{i}"] = train_autoencoder_image(dataloader=training_dls[i],
+                                                                                modality='label', task=task,
+                                                                                dataset_name=dataset_name, i=i)
+                df = fill_df_with_xp_results( df, perf_dict, pooled_hyperparameters, method_name, columns_names, results_file,)
+                # df = fill_df_with_xp_results( df, pooled_perf_dict, pooled_hyperparameters, method_name, columns_names, results_file, pooled=True,)
         print(f"------------------------ compute_ensemble_perf = {compute_ensemble_perf} ---------------------")
-        if compute_ensemble_perf:
+        if compute_ensemble_perf and do_ensemble:
             print(
                 "Computing ensemble performance, local models need to have been"
                 " trained in the same runtime"
             )
-            if dataset_name == "fed_heart_disease":
-                to_norm = True
-            else:
-                to_norm = False
-            preds_concs, gt_concs = create_data_structure(y_pred_dicts, y_true_dicts, to_norm)
-            pooled_preds_concs, pooled_gt_concs = create_data_structure(pooled_y_pred_dicts, pooled_y_true_dicts, to_norm)
 
-            with open(f'{PROJECT_DIR}/y_pred_dicts.obj', 'wb') as outp:
-                pickle.dump(y_pred_dicts, outp)
-            with open(f'{PROJECT_DIR}/y_true_dicts.obj', 'wb') as outp:
-                pickle.dump(y_true_dicts, outp)
             for ensembling_strategy in ensembling_strategies:
                 if ensembling_strategy == 'uncertainty':
                     weights = uncertainty_computation(saved_models, evaluate_func,
-                                                      test_dls, use_gpu, N=20, project_dir=PROJECT_DIR)
+                                                          test_dls, use_gpu, N=5)
                     pooled_weights = {'client_test_0': []}
-                    for test_set in weights.keys():
-                        for el in weights[test_set]:
-                            pooled_weights['client_test_0'].append(el)
-                elif ensembling_strategy == 'ae':
-                    weights = 0
-                    pooled_weights = 0
+                    # for test_set in weights.keys():
+                    #     for el in weights[test_set]:
+                    #         pooled_weights['client_test_0'].append(el)
+                elif ensembling_strategy == 'ae_data':
+                    weights = ae_weights_computation(ae_data_models, test_dls, use_gpu, ensembling_strategy)
+                    # pooled_weights = {'client_test_0': []}
+                    # for test_set in weights.keys():
+                    #   for el in weights[test_set]:
+                    #     pooled_weights['client_test_0'].append(el)
+                elif ensembling_strategy == 'ae_label':
+                    weights = ae_weights_computation(ae_label_models, test_dls, use_gpu, ensembling_strategy)
+                    pooled_weights = {'client_test_0': []}
+                    # for test_set in weights.keys():
+                    #     for el in weights[test_set]:
+                    #         pooled_weights['client_test_0'].append(el)
                 else:
                     weights = None
                     pooled_weights = None
-                with open(f'{PROJECT_DIR}/weights.obj', 'wb') as outp:
-                    pickle.dump(weights, outp)
-                local_ensemble_perf = ensemble_perf_from_predictions(
-                    strategy=ensembling_strategy,
-                    y_true_dicts=y_true_dicts,
-                    y_pred_dicts=preds_concs,
-                    saved_models=saved_models,
-                    num_clients=NUM_CLIENTS,
-                    metric=metric,
-                    weights=weights,
-                    task=task,
-                    proj_dir=PROJECT_DIR
-                )
+                if dataset_name == "fed_isic2019":
+                    to_norm = True
+                else:
+                    to_norm = False
 
-                pooled_ensemble_perf = ensemble_perf_from_predictions(
-                    strategy=ensembling_strategy,
-                    y_true_dicts=pooled_y_true_dicts,
-                    y_pred_dicts=pooled_preds_concs,
-                    saved_models=saved_models,
-                    num_clients=NUM_CLIENTS,
-                    metric=metric,
-                    weights=pooled_weights,
-                    task=task,
-                    proj_dir=PROJECT_DIR,
-                    num_clients_test=1
-                )
-                local_ensemble_perf['weighted_average'] = np.average(list(local_ensemble_perf.values()),
-                                                                     weights=dimensions)
-                local_ensemble_perf['average'] = np.average(list(local_ensemble_perf.values()))
+                preds_concs, gt_concs = create_data_structure(y_pred_dicts, y_true_dicts, to_norm=to_norm)
+                # pooled_preds_concs, pooled_gt_concs = create_data_structure(pooled_y_pred_dicts,
+                #                                                             pooled_y_true_dicts, to_norm=to_norm)
+                if preds_concs is not None:
+                    local_ensemble_perf = ensemble_perf_from_predictions(
+                        strategy=ensembling_strategy,
+                        y_true_dicts=y_true_dicts,
+                        y_pred_dicts=preds_concs,
+                        num_clients=NUM_CLIENTS,
+                        metric=metric,
+                        weights=weights,
+                        task=task
+                    )
+
+                    # pooled_ensemble_perf = ensemble_perf_from_predictions(
+                    #     strategy=ensembling_strategy,
+                    #     y_true_dicts=pooled_y_true_dicts,
+                    #     y_pred_dicts=pooled_preds_concs,
+                    #     num_clients=NUM_CLIENTS,
+                    #     metric=metric,
+                    #     weights=pooled_weights,
+                    #     task=task,
+                    #     num_clients_test=1
+                    # )
+                else:
+                    local_ensemble_perf = ensemble_perf_from_models(
+                        strategy=ensembling_strategy,
+                        dls=test_dls,
+                        models=saved_models,
+                        num_clients=NUM_CLIENTS,
+                        metric=metric,
+                        weights=weights,
+                        task=task,
+                    )
+                    # pooled_ensemble_perf = ensemble_perf_from_models(
+                    #     strategy=ensembling_strategy,
+                    #     dls=[test_pooled],
+                    #     models=saved_models,
+                    #     num_clients=NUM_CLIENTS,
+                    #     metric=metric,
+                    #     weights=weights,
+                    #     task=task,
+                    #     num_clients_test=1
+                    # )
+
+                # local_ensemble_perf['weighted_average'] = np.average(list(local_ensemble_perf.values()),
+                #                                                     weights=dimensions)
+                # local_ensemble_perf['average'] = np.average(list(local_ensemble_perf.values()))
 
                 df = fill_df_with_xp_results(
                     df,
@@ -446,20 +485,23 @@ def main(args_cli):
                     results_file,
                 )
 
-                df = fill_df_with_xp_results(
-                    df,
-                    pooled_ensemble_perf,
-                    pooled_hyperparameters,
-                    ensembling_strategy,
-                    columns_names,
-                    results_file,
-                    pooled=True
-                )
+                # df = fill_df_with_xp_results(
+                #     df,
+                #     pooled_ensemble_perf,
+                #     pooled_hyperparameters,
+                #     ensembling_strategy,
+                #     columns_names,
+                #     results_file,
+                #     pooled=True
+                # )
     # Strategies
     # Needed for perfect reproducibility otherwise strategies are ordered randomly
     strats_names = list(strategy_specific_hp_dicts.keys())
     strats_names.sort()
-    if do_strategy:
+    strats_names.remove('Cyclic')
+    strats_names.remove('FedAvgFineTuning')
+
+    if do_strategy and do_feder:
         for idx, num_updates in enumerate(run_num_updates):
             for sname in strats_names:
                 print("========================")
@@ -511,15 +553,20 @@ def main(args_cli):
                     )
 
                     # We run the FL strategy
-
+                    log_dir = f"./runs/federated_{dataset_name}/sname"
+                    os.makedirs(log_dir, exist_ok=True)
                     s = getattr(strats, sname)(
-                        **args, log=args_cli.log, log_basename=basename
+                        **args, log=args_cli.log, log_basename=basename, logdir=log_dir
                     )
                     print("FL strategy", sname, " num_updates ", num_updates)
                     set_seed(args_cli.seed)
-
+                    dt1 = datetime.now(tz=pytz.timezone('Europe/Rome'))
                     m = s.run()[0]
-
+                    dt2 = datetime.now(tz=pytz.timezone('Europe/Rome'))
+                    t = (dt2 - dt1).total_seconds()
+                    f = open(f"training_times_{dataset_name}.txt", "a")
+                    f.write(f"{sname} training: {t}\n")
+                    f.close()
                     (
                         perf_dict,
                         pooled_perf_dict,
@@ -530,8 +577,11 @@ def main(args_cli):
                     ) = evaluate_model_on_local_and_pooled_tests(
                         m, test_dls, test_pooled, metric, evaluate_func
                     )
-                    perf_dict['weighted_average'] = np.average(list(perf_dict.values()), weights=dimensions)
-                    perf_dict['average'] = np.average(list(perf_dict.values()))
+                    # with open(f'{dataset_name}_{sname}.obj', 'wb') as file:
+                    # A new file will be created
+                    # pickle.dump(m.state_dict(), file)
+                    # perf_dict['weighted_average'] = np.average(list(perf_dict.values()), weights=dimensions)
+                    # perf_dict['average'] = np.average(list(perf_dict.values()))
                     df = fill_df_with_xp_results(
                         df,
                         perf_dict,
@@ -540,20 +590,19 @@ def main(args_cli):
                         columns_names,
                         results_file,
                     )
-                    df = fill_df_with_xp_results(
-                        df,
-                        pooled_perf_dict,
-                        hyperparameters,
-                        sname + str(num_updates),
-                        columns_names,
-                        results_file,
-                        pooled=True,
-                    )
+                    # df = fill_df_with_xp_results(
+                    #     df,
+                    #     pooled_perf_dict,
+                    #     hyperparameters,
+                    #     sname + str(num_updates),
+                    #     columns_names,
+                    #     results_file,
+                    #     pooled=True,
+                    # )
     print(f"Experiment finished.")
 
 
 if __name__ == "__main__":
-
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--GPU",
@@ -612,8 +661,8 @@ if __name__ == "__main__":
         type=int,
         default=None,
         help="The number of SGD fine-tuning updates to be"
-        "performed on the model at the personalization step,"
-        "if strategy is given and that it is FedAvgFineTuning",
+             "performed on the model at the personalization step,"
+             "if strategy is given and that it is FedAvgFineTuning",
     )
     parser.add_argument(
         "--tau",
@@ -621,7 +670,7 @@ if __name__ == "__main__":
         type=float,
         default=None,
         help="FedOpt tau parameter used only if strategy is "
-        "given and that it is a fedopt strategy",
+             "given and that it is a fedopt strategy",
     )
     parser.add_argument(
         "--beta1",
@@ -629,7 +678,7 @@ if __name__ == "__main__":
         type=float,
         default=None,
         help="FedOpt beta1 parameter used only if strategy is "
-        "given and that it is a fedopt strategy",
+             "given and that it is a fedopt strategy",
     )
     parser.add_argument(
         "--beta2",
@@ -637,7 +686,7 @@ if __name__ == "__main__":
         type=float,
         default=None,
         help="FedOpt beta2 parameter used only if strategy is"
-        " given and that it is a fedopt strategy",
+             " given and that it is a fedopt strategy",
     )
     parser.add_argument(
         "--strategy",
@@ -691,7 +740,7 @@ if __name__ == "__main__":
         type=float,
         default=None,
         help="the maximum L2 norm of per-sample gradients; "
-        "used to enforce differential privacy",
+             "used to enforce differential privacy",
     )
     parser.add_argument(
         "--log",
@@ -727,7 +776,7 @@ if __name__ == "__main__":
         default=0,
         type=int,
         help="Will only be used if --single-centric-baseline Local, will test"
-        "only training on Local {nlocal}.",
+             "only training on Local {nlocal}.",
     )
     parser.add_argument("--seed", default=0, type=int, help="Seed")
 

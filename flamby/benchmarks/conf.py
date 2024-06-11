@@ -40,7 +40,8 @@ def check_config(config_path):
                 raise ValueError("Optimizer must be from torch")
 
     # ensure that the results file exists if not create it
-    results_file = Path(config["results_file"])
+    ff = config["results_file"]
+    results_file = Path(ff)
 
     if not results_file.suffix == ".csv":
         results_file.with_suffix(".csv")
