@@ -21,7 +21,7 @@ Given a test point, CBL combines predictions obtained from the different models 
 It is possible to reproduce the results of the paper by following FLamby's steps to obtain the datasets, and then run fed_benchmarking:
 ```
 cd flamby/benchmarks
-python fed_benchmark.py --seed 42 -cfp ../config_dataset.json
+python fed_benchmark.py --seed seed -cfp ../config_dataset.json
 ```
 When the training of local models is finished, they will saved locally to be used asynchronously to do CBL.
 
