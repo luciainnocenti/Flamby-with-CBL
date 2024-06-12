@@ -14,9 +14,9 @@
 
 ## FLamby with consensus-based learning
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="/docs/img/Schemas_Chapt_Dark_Mode.png">
-  <source media="(prefers-color-scheme: light)" srcset="/docs/img/CLMethods.png">
-  <img alt="Description of image" src="/docs/img/CLMethods.png">
+  <source media="(prefers-color-scheme: dark)" srcset="/docs/img/FLCBL_dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="/docs/img/FLCBL_light.png">
+  <img alt="Description of image" src="/docs/img/FLCBL_light.png">
 </picture>
 
 This repository extends the FLamby benchmark to the consensus-based collaborative learning (CBL) paradigm as presented in Innocenti et al. (2024).
