@@ -1,4 +1,4 @@
-# FLamby
+# FLamby with CBL
 
 ## Table of Contents
 - [FLamby with CBL](#cbl)
