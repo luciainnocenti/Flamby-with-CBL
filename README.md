@@ -19,8 +19,8 @@
   <img alt="Description of image" src="/docs/img/FLCBL_light.png">
 </picture>
 
-This repository extends the FLamby benchmark to the consensus-based collaborative learning (CBL) paradigm as presented in Innocenti et al. (2024).
-As presented in the related [paper](https://www.biorxiv.org/content/10.1101/2024.05.27.596048v1.abstract), CBL is an alternative to federated learning for collaborative learning. 
+This repository extends the FLamby benchmark to the consensus-based learning (CBL) paradigm, presented by Innocenti et al. (2024).
+As explained in the related [paper](https://www.biorxiv.org/content/10.1101/2024.05.27.596048v1.abstract), CBL is an alternative to federated learning for collaborative learning:
 Given a test point, CBL combines predictions obtained from the different models trained independently by each client on local data. Therefore, CBL is based on an offline routine, where information is exchanged only during inference. 
 
 It is possible to reproduce the results of the paper by following FLamby's steps to obtain the datasets, and then run fed_benchmarking:
@@ -28,7 +28,7 @@ It is possible to reproduce the results of the paper by following FLamby's steps
 cd flamby/benchmarks
 python fed_benchmark.py --seed seed -cfp ../config_dataset.json
 ```
-When the training of local models is finished, they will saved locally to be used asynchronously to do CBL.
+When the training of local models is finished, the models are saved locally to be used asynchronously to do CBL.
 
 ## CBL Methods
 
