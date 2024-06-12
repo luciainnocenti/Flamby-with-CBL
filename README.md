@@ -29,6 +29,7 @@ cd flamby/benchmarks
 python fed_benchmark.py --seed seed -cfp ../config_dataset.json
 ```
 When the training of local models is finished, the models are saved locally to be used asynchronously to do CBL.
+We tested CBL on the following datasets: FedHeart, FedIXI, FedISIC, FedKiTS, and FedTGCA-BRCA.
 
 ## CBL Methods
 
