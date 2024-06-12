@@ -13,7 +13,6 @@
 - [Acknowledgements](#acknowledgements)
 
 ## FLamby with consensus-based learning
-<img src="/docs/img/CLMethods.png">
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="/docs/img/Schemas_Chapt_Dark_Mode.png">
   <source media="(prefers-color-scheme: light)" srcset="/docs/img/CLMethods.png">
